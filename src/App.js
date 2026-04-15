@@ -1,16 +1,18 @@
-import React, { useEffect, useRef } from "react";
-import { Hands } from "@mediapipe/hands";
+// App.js
+import React, { useEffect, useRef, useState } from "react";
+import { Hands, HAND_CONNECTIONS } from "@mediapipe/hands";
 import { Camera } from "@mediapipe/camera_utils";
+import { drawConnectors, drawLandmarks } from "@mediapipe/drawing_utils";
 
 function App() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const lastPointRef = useRef(null);
+  const [points, setPoints] = useState([]);
 
   useEffect(() => {
-    // Initialize MediaPipe Hands
     const hands = new Hands({
       locateFile: (file) => {
+        // ✅ Correct path for wasm/data files
         return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
       },
     });
@@ -22,76 +24,82 @@ function App() {
       minTrackingConfidence: 0.7,
     });
 
-    // Handle results from MediaPipe
-    hands.onResults((results) => {
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext("2d");
+    hands.onResults(onResults);
 
-      // Draw video feed
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-
-      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-        const landmarks = results.multiHandLandmarks[0];
-        const indexTip = landmarks[8];
-        const thumbTip = landmarks[4];
-
-        let x = indexTip.x * canvas.width;
-        let y = indexTip.y * canvas.height;
-
-        // Smooth fingertip movement
-        const smoothFactor = 0.7;
-        if (lastPointRef.current) {
-          x = x * (1 - smoothFactor) + lastPointRef.current.x * smoothFactor;
-          y = y * (1 - smoothFactor) + lastPointRef.current.y * smoothFactor;
-        }
-
-        // Pinch detection (draw only when thumb and index are close)
-        const distance = Math.hypot(
-          (indexTip.x - thumbTip.x) * canvas.width,
-          (indexTip.y - thumbTip.y) * canvas.height
-        );
-        const drawMode = distance < 40; // threshold in pixels
-
-        if (drawMode) {
-          if (lastPointRef.current) {
-            ctx.beginPath();
-            ctx.moveTo(lastPointRef.current.x, lastPointRef.current.y);
-            ctx.lineTo(x, y);
-            ctx.strokeStyle = "blue";
-            ctx.lineWidth = 2;
-            ctx.stroke();
-          }
-          lastPointRef.current = { x, y };
-        } else {
-          lastPointRef.current = null;
-        }
-
-        // Fingertip marker
-        ctx.beginPath();
-        ctx.arc(x, y, 5, 0, 2 * Math.PI);
-        ctx.fillStyle = drawMode ? "green" : "red";
-        ctx.fill();
-      } else {
-        lastPointRef.current = null;
-      }
-    });
-
-    // Set up camera
-    const camera = new Camera(videoRef.current, {
-      onFrame: async () => {
-        await hands.send({ image: videoRef.current });
-      },
-      width: 640,
-      height: 480,
-    });
-    camera.start();
+    if (videoRef.current) {
+      const camera = new Camera(videoRef.current, {
+        onFrame: async () => {
+          await hands.send({ image: videoRef.current });
+        },
+        width: 640,
+        height: 480,
+      });
+      camera.start();
+    }
   }, []);
 
+  const onResults = (results) => {
+    const canvasElement = canvasRef.current;
+    const ctx = canvasElement.getContext("2d");
+
+    ctx.save();
+    ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+    // Draw webcam feed
+    ctx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+    if (results.multiHandLandmarks) {
+      for (const landmarks of results.multiHandLandmarks) {
+        drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {
+          color: "#00FF00",
+          lineWidth: 2,
+        });
+        drawLandmarks(ctx, landmarks, { color: "#FF0000", lineWidth: 2 });
+
+        // Track index fingertip (landmark #8)
+        const indexTip = landmarks[8];
+        const x = indexTip.x * canvasElement.width;
+        const y = indexTip.y * canvasElement.height;
+
+        // Append point to path
+        setPoints((prev) => [...prev, { x, y }]);
+      }
+    }
+
+    // Draw glowing writing path
+    ctx.strokeStyle = "magenta";
+    ctx.lineWidth = 4;
+    ctx.shadowBlur = 25;
+    ctx.shadowColor = "pink";
+    ctx.beginPath();
+    points.forEach((p, i) => {
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.stroke();
+
+    ctx.restore();
+  };
+
   return (
-    <div>
+    <div className="App" style={{ textAlign: "center" }}>
+      <h2>MediaPipe Hands Demo – Air Writing</h2>
       <video ref={videoRef} style={{ display: "none" }} />
-      <canvas ref={canvasRef} width={640} height={480} />
+      <canvas ref={canvasRef} width="640" height="480" />
+      <button
+        onClick={() => setPoints([])}
+        style={{
+          marginTop: "10px",
+          padding: "8px 16px",
+          backgroundColor: "#ff00ff",
+          color: "white",
+          border: "none",
+          borderRadius: "5px",
+          cursor: "pointer",
+        }}
+      >
+        Clear Writing
+      </button>
     </div>
   );
 }
